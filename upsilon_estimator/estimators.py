@@ -1,17 +1,12 @@
 """Core upsilon_k estimation functions."""
 
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-# Add src to path to access ld_sim
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from ld_sim import theory
-from ld_sim import zarr_backend as zb
-
+from . import _theory as theory
+from . import _panel as zb
 from .utils import paired_draws, estimate_components
 
 

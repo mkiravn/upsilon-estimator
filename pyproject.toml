@@ -18,6 +18,8 @@ dependencies = [
     "pandas>=1.3",
 ]
 
+# Note: ld_sim is vendored internally (_theory.py, _panel.py)
+
 [project.optional-dependencies]
 zarr = ["zarr>=2.10"]
 dev = ["pytest", "black", "mypy"]

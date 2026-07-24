@@ -1,14 +1,9 @@
 """Utility functions for paired locus sampling and component estimation."""
 
-import sys
-from pathlib import Path
-
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from ld_sim import theory
-from ld_sim import zarr_backend as zb
+from . import _theory as theory
+from . import _panel as zb
 
 
 def paired_draws(marker_idx, causal_idx, n, rng, panel, gpos):

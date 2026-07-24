@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .estimators import estimate_upsilon_k
+from .estimators import estimate_upsilon_k, estimate_upsilon_k_crude
 
 
 def _load_indices(path):
@@ -127,6 +127,12 @@ def main():
     )
 
     parser.add_argument(
+        "--crude-only",
+        action="store_true",
+        help="Compute crude estimates only (no A_k weighting; simpler and faster).",
+    )
+
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -160,19 +166,32 @@ def main():
             print(f"  Causal: {len(causal_idx)} sites from {args.causal_indices}")
 
     try:
-        results = estimate_upsilon_k(
-            str(zarr_path),
-            marker_indices=marker_idx,
-            causal_indices=causal_idx,
-            marker_threshold=args.marker_threshold,
-            causal_threshold=args.causal_threshold,
-            n_draws=args.n_draws,
-            seed=args.seed,
-            k_values=args.k_values,
-            chromosome=args.chromosome,
-            bin_by_distance=args.bin_by_distance,
-            n_distance_bins=args.n_distance_bins,
-        )
+        if args.crude_only:
+            results = estimate_upsilon_k_crude(
+                str(zarr_path),
+                marker_indices=marker_idx,
+                causal_indices=causal_idx,
+                marker_threshold=args.marker_threshold,
+                causal_threshold=args.causal_threshold,
+                n_draws=args.n_draws,
+                seed=args.seed,
+                k_values=args.k_values,
+                chromosome=args.chromosome,
+            )
+        else:
+            results = estimate_upsilon_k(
+                str(zarr_path),
+                marker_indices=marker_idx,
+                causal_indices=causal_idx,
+                marker_threshold=args.marker_threshold,
+                causal_threshold=args.causal_threshold,
+                n_draws=args.n_draws,
+                seed=args.seed,
+                k_values=args.k_values,
+                chromosome=args.chromosome,
+                bin_by_distance=args.bin_by_distance,
+                n_distance_bins=args.n_distance_bins,
+            )
     except Exception as e:
         print(f"Error during estimation: {e}", file=sys.stderr)
         import traceback

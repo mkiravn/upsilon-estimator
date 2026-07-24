@@ -125,6 +125,95 @@ def load_panel(path, chromosome=None):
     }
 
 
+def estimate_upsilon_k_crude(
+    zarr_path,
+    marker_indices=None,
+    causal_indices=None,
+    marker_threshold=None,
+    causal_threshold=None,
+    n_draws=150_000,
+    seed=1,
+    k_values=None,
+    chromosome=None,
+):
+    """Estimate crude upsilon_k: (r²_MQ + Φₖ) / (r²_MM + Φₖ).
+
+    Simpler, more interpretable variant without A_k (kurtosis) weighting.
+    Uses pooled r² and shared IBD component only.
+
+    Args:
+        zarr_path: Path to zarr or npz panel.
+        marker_indices: Explicit marker site indices (preferred).
+        causal_indices: Explicit causal site indices (preferred).
+        marker_threshold: AF threshold for markers (if indices not provided).
+        causal_threshold: AF threshold for causal (if indices not provided).
+        n_draws: Number of locus pairs to sample (default 150,000).
+        seed: Random seed (default 1).
+        k_values: List of kinship classes (default [2..9]).
+        chromosome: Specific chromosome to load (for xftsim zarr).
+
+    Returns:
+        DataFrame with columns: k, upsilon_k_crude, r2_MM, r2_MQ, shared_ibd_part
+    """
+    if k_values is None:
+        k_values = list(range(2, 10))  # k=2 to k=9
+
+    panel_data = load_panel(zarr_path, chromosome=chromosome)
+    panel = panel_data["panel"]
+    af = panel_data["af"]
+    gpos = panel_data["gpos"]
+    n_hap = panel_data["n_hap"]
+
+    # Identify marker and causal sites
+    if marker_indices is not None and causal_indices is not None:
+        marker_idx = np.asarray(marker_indices, dtype=int)
+        causal_idx = np.asarray(causal_indices, dtype=int)
+    else:
+        if marker_threshold is None:
+            marker_threshold = 0.01
+        if causal_threshold is None:
+            causal_threshold = 0.05
+
+        marker_idx = np.nonzero(af > marker_threshold)[0]
+        causal_idx = np.nonzero((af > 0) & (af < causal_threshold))[0]
+
+    if len(marker_idx) == 0 or len(causal_idx) == 0:
+        raise ValueError(
+            f"No marker sites or causal sites found. "
+            f"(marker: {len(marker_idx)}, causal: {len(causal_idx)})"
+        )
+
+    # Draw paired loci
+    rng = np.random.default_rng(seed)
+    num, den = paired_draws(
+        marker_idx, causal_idx, n_draws, rng=rng, panel=panel, gpos=gpos
+    )
+
+    # Compute crude upsilon_k for each k
+    rows = []
+    r2_MM = np.nanmean(theory.r2_debiased(den["r"] ** 2, n_hap))
+    r2_MQ = np.nanmean(theory.r2_debiased(num["r"] ** 2, n_hap))
+
+    for k in k_values:
+        comp_num = estimate_components(k, num, n_hap)
+        shared_ibd = np.nanmean(comp_num["shared_ibd_part"])
+
+        # Crude: (r2_MQ + Phi_k) / (r2_MM + Phi_k)
+        upsilon_crude = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
+
+        rows.append(
+            {
+                "k": k,
+                "upsilon_k_crude": upsilon_crude,
+                "r2_MM": r2_MM,
+                "r2_MQ": r2_MQ,
+                "shared_ibd_part": shared_ibd,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def estimate_upsilon_k(
     zarr_path,
     marker_indices=None,

@@ -4,7 +4,33 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 from .estimators import estimate_upsilon_k
+
+
+def _load_indices(path):
+    """Load site indices from a file (CSV, NPZ, or .npy)."""
+    if path is None:
+        return None
+    path = Path(path)
+    if path.suffix == ".npy":
+        return np.load(path)
+    elif path.suffix == ".npz":
+        data = np.load(path)
+        if len(data.files) == 1:
+            return data[data.files[0]]
+        else:
+            raise ValueError("NPZ file must have exactly one array")
+    elif path.suffix in (".csv", ".txt"):
+        df = pd.read_csv(path)
+        if len(df.columns) == 1:
+            return df.iloc[:, 0].values
+        else:
+            raise ValueError("CSV must have exactly one column")
+    else:
+        raise ValueError(f"Unsupported file format: {path.suffix}")
 
 
 def main():
@@ -28,17 +54,38 @@ def main():
     )
 
     parser.add_argument(
+        "--marker-indices",
+        type=str,
+        default=None,
+        help="Path to file with marker site indices (.npy, .npz, or single-column CSV).",
+    )
+
+    parser.add_argument(
+        "--causal-indices",
+        type=str,
+        default=None,
+        help="Path to file with causal site indices (.npy, .npz, or single-column CSV).",
+    )
+
+    parser.add_argument(
         "--marker-threshold",
         type=float,
-        default=0.01,
-        help="Allele frequency threshold for marker sites (default 0.01).",
+        default=None,
+        help="Allele frequency threshold for markers (default 0.01, ignored if --marker-indices provided).",
     )
 
     parser.add_argument(
         "--causal-threshold",
         type=float,
-        default=0.05,
-        help="Allele frequency threshold for causal sites (default 0.05).",
+        default=None,
+        help="Allele frequency threshold for causal (default 0.05, ignored if --causal-indices provided).",
+    )
+
+    parser.add_argument(
+        "--chromosome",
+        type=str,
+        default=None,
+        help="Chromosome to load (if available in data).",
     )
 
     parser.add_argument(
@@ -99,20 +146,37 @@ def main():
 
     if args.verbose:
         print(f"Loading panel from {zarr_path}...")
+        if args.chromosome:
+            print(f"  Chromosome: {args.chromosome}")
+
+    # Load indices if provided
+    marker_idx = _load_indices(args.marker_indices) if args.marker_indices else None
+    causal_idx = _load_indices(args.causal_indices) if args.causal_indices else None
+
+    if args.verbose and (marker_idx is not None or causal_idx is not None):
+        if marker_idx is not None:
+            print(f"  Markers: {len(marker_idx)} sites from {args.marker_indices}")
+        if causal_idx is not None:
+            print(f"  Causal: {len(causal_idx)} sites from {args.causal_indices}")
 
     try:
         results = estimate_upsilon_k(
             str(zarr_path),
+            marker_indices=marker_idx,
+            causal_indices=causal_idx,
             marker_threshold=args.marker_threshold,
             causal_threshold=args.causal_threshold,
             n_draws=args.n_draws,
             seed=args.seed,
             k_values=args.k_values,
+            chromosome=args.chromosome,
             bin_by_distance=args.bin_by_distance,
             n_distance_bins=args.n_distance_bins,
         )
     except Exception as e:
         print(f"Error during estimation: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
     results.to_csv(output_path, index=False)

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "upsilon-estimator"
+version = "0.1.0"
+description = "Estimate upsilon_k (marker-causal relatedness ratio) from founder panels"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "LD Simulations Team"}
+]
+license = {text = "MIT"}
+
+dependencies = [
+    "numpy>=1.20",
+    "pandas>=1.3",
+]
+
+[project.optional-dependencies]
+zarr = ["zarr>=2.10"]
+dev = ["pytest", "black", "mypy"]
+
+[project.scripts]
+upsilon = "upsilon_estimator.cli:main"
+
+[tool.setuptools]
+packages = ["upsilon_estimator"]
+
+[tool.black]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true

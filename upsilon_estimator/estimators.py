@@ -509,15 +509,17 @@ def estimate_upsilon_k_weighted(
         upsilon = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
 
         # Weighted: recompute numerator with per-pair gamma weighting
+        # Only the CAUSAL (numerator partner) frequency determines the weight
         # Get the raw three-way decomposition for the numerator pairs
         tw_num = theory.cov_k_three_way(
             k, num["f_i"], num["f_j"], num["r"], num["c_ab"], n_haplotypes=n_hap
         )
 
-        # Per-pair weighting: (gamma_marker + gamma_causal) / 2
-        gamma_pair_weight = (gamma_marker + gamma_causal) / 2.0
+        # Per-pair weighting: gamma_causal only (not marker)
+        # The causal locus determines effect-size variance
+        gamma_pair_weight = gamma_causal
 
-        # Weighted r2 component: A_k * r2 * (gamma_i + gamma_j) / 2
+        # Weighted r2 component: A_k * r2 * gamma_causal
         r2_part_weighted = tw_num["r2_part"] * gamma_pair_weight
 
         # Shared IBD component is not weighted (frequency-independent)
@@ -537,8 +539,7 @@ def estimate_upsilon_k_weighted(
                 "r2_MM": r2_MM,
                 "r2_MQ": r2_MQ,
                 "shared_ibd_part": shared_ibd,
-                "gamma_marker": np.nanmean(gamma_marker),
-                "gamma_causal": np.nanmean(gamma_causal),
+                "gamma_causal_mean": np.nanmean(gamma_causal),
                 "alpha": alpha,
             }
         )

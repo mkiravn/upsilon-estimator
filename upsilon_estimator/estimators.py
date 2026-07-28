@@ -403,3 +403,144 @@ def _add_distance_bins(num, den, marker_idx, causal_idx, gpos, results, k_values
     results = results.set_index("k").join(binned_df, how="left").reset_index()
 
     return results
+
+
+
+def estimate_upsilon_k_weighted(
+    zarr_path,
+    marker_indices=None,
+    causal_indices=None,
+    marker_threshold=None,
+    causal_threshold=None,
+    n_draws=150_000,
+    seed=1,
+    k_values=None,
+    chromosome=None,
+    alpha=-1.0,
+):
+    """Estimate upsilon_k with frequency-dependent effect-size weighting (Speed alpha-model).
+
+    The standard unweighted model treats all causal loci symmetrically. Under a random-effects
+    model where SNP effect-size variance depends on allele frequency, the covariance is:
+
+        Cov(g_i, g_j) = σ_β² Σ_ℓ γ_ℓ X_i_ℓ X_j_ℓ
+
+    where E[β_ℓ²] = σ_β² γ_ℓ and γ_ℓ = [2f_ℓ(1-f_ℓ)]^(1+alpha).
+
+    For marker-causal pairs {ℓ,m}, the per-pair weighting factor is (γ_ℓ + γ_m) / 2.
+
+    The weighted upsilon_k is:
+        upsilon_k^(gamma) = mean(h_k * (γ_marker + γ_causal) / 2) / mean(h_k)
+
+    Args:
+        zarr_path: Path to zarr or npz panel.
+        marker_indices, causal_indices: Explicit site indices (preferred).
+        marker_threshold, causal_threshold: AF thresholds for automatic site selection.
+        n_draws: Number of locus pairs to sample (default 150,000).
+        seed: Random seed (default 1).
+        k_values: List of kinship classes (default [2..9]).
+        chromosome: Specific chromosome to load (for xftsim zarr).
+        alpha: Speed alpha-model exponent (default -1.0 for GCTA/uniform weighting).
+               - alpha=-1: uniform weighting (matches GCTA)
+               - alpha<-1: upweight rare variants
+               - alpha>-1: upweight common variants
+
+    Returns:
+        DataFrame with columns: k, upsilon_k, upsilon_k_weighted, r2_MM, r2_MQ,
+                               shared_ibd_part, gamma_marker, gamma_causal
+    """
+    if k_values is None:
+        k_values = list(range(2, 10))
+
+    panel_data = load_panel(zarr_path, chromosome=chromosome)
+    panel = panel_data["panel"]
+    af = panel_data["af"]
+    gpos = panel_data["gpos"]
+    n_hap = panel_data["n_hap"]
+
+    # Identify marker and causal sites
+    if marker_indices is not None and causal_indices is not None:
+        marker_idx = np.asarray(marker_indices, dtype=int)
+        causal_idx = np.asarray(causal_indices, dtype=int)
+    else:
+        if marker_threshold is None:
+            marker_threshold = 0.01
+        if causal_threshold is None:
+            causal_threshold = 0.05
+
+        marker_idx = np.nonzero(af > marker_threshold)[0]
+        causal_idx = np.nonzero((af > 0) & (af < causal_threshold))[0]
+
+    if len(marker_idx) == 0 or len(causal_idx) == 0:
+        raise ValueError(
+            f"No marker sites or causal sites found. "
+            f"(marker: {len(marker_idx)}, causal: {len(causal_idx)})"
+        )
+
+    # Draw paired loci
+    rng = np.random.default_rng(seed)
+    num, den = paired_draws(
+        marker_idx, causal_idx, n_draws, rng=rng, panel=panel, gpos=gpos
+    )
+
+    # Get allele frequencies for the sampled pairs
+    af_marker = af[den["anchor"]]  # marker anchors in denominator pairs
+    af_causal = af[num["anchor"]]  # causal anchors in numerator pairs
+
+    # Compute gamma weights: gamma_l = [2*f_l*(1-f_l)]^(1+alpha)
+    # Normalize so mean gamma across all frequencies is 1
+    norm_freq = af[(af > 0) & (af < 1)]  # Exclude fixed variants
+    norm_factor = float(np.mean((2.0 * norm_freq * (1.0 - norm_freq)) ** (1.0 + alpha)))
+
+    gamma_marker = (2.0 * af_marker * (1.0 - af_marker)) ** (1.0 + alpha) / norm_factor
+    gamma_causal = (2.0 * af_causal * (1.0 - af_causal)) ** (1.0 + alpha) / norm_factor
+
+    # Compute upsilon_k for each k
+    rows = []
+    r2_MM = np.nanmean(theory.r2_debiased(den["r"] ** 2, n_hap))
+    r2_MQ = np.nanmean(theory.r2_debiased(num["r"] ** 2, n_hap))
+
+    for k in k_values:
+        # Get components for unweighted numerator
+        comp_num = estimate_components(k, num, n_hap)
+        shared_ibd = np.nanmean(comp_num["shared_ibd_part"])
+
+        # Unweighted: (r2_MQ + Phi_k) / (r2_MM + Phi_k)
+        upsilon = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
+
+        # Weighted: recompute numerator with per-pair gamma weighting
+        # Get the raw three-way decomposition for the numerator pairs
+        tw_num = theory.cov_k_three_way(
+            k, num["f_i"], num["f_j"], num["r"], num["c_ab"], n_haplotypes=n_hap
+        )
+
+        # Per-pair weighting: (gamma_marker + gamma_causal) / 2
+        gamma_pair_weight = (gamma_marker + gamma_causal) / 2.0
+
+        # Weighted r2 component: A_k * r2 * (gamma_i + gamma_j) / 2
+        r2_part_weighted = tw_num["r2_part"] * gamma_pair_weight
+
+        # Shared IBD component is not weighted (frequency-independent)
+        shared_ibd_part = tw_num["shared_ibd_part"]
+
+        # Numerator: mean(weighted h_k) = mean(r2_part_weighted + shared_ibd_part)
+        h_k_weighted_numerator = np.nanmean(r2_part_weighted + shared_ibd_part)
+
+        # Upsilon_k^(gamma) = mean(h_k_weighted) / (r2_MM + Phi_k)
+        upsilon_weighted = h_k_weighted_numerator / (r2_MM + shared_ibd)
+
+        rows.append(
+            {
+                "k": k,
+                "upsilon_k": upsilon,
+                "upsilon_k_weighted": upsilon_weighted,
+                "r2_MM": r2_MM,
+                "r2_MQ": r2_MQ,
+                "shared_ibd_part": shared_ibd,
+                "gamma_marker": np.nanmean(gamma_marker),
+                "gamma_causal": np.nanmean(gamma_causal),
+                "alpha": alpha,
+            }
+        )
+
+    return pd.DataFrame(rows)

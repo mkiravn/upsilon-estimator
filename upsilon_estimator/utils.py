@@ -78,7 +78,9 @@ def estimate_components(k, pair_data, n_hap):
         Dict with keys:
             - r2_part: r^2 component (A_k * r^2)
             - cross_part: cross component (C_k * r * lambda_a * lambda_b)
-            - shared_ibd_part: shared IBD component (B_k)
+                         [Excluded from upsilon_k estimate: noisy, rare-variant-driven,
+                          kurtosis ~1000s, contributes <0.5% signal, inflates by 13-39%]
+            - shared_ibd_part: shared IBD component (Phi_k)
             - total: sum of all three
     """
     f_i = pair_data["f_i"]

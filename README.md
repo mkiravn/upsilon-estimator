@@ -2,7 +2,11 @@
 
 Estimate upsilon_k (marker-causal relatedness ratio) from founder panels in zarr or npz format.
 
-Outputs both crude (debiased r² + Φₖ) and full (exact hₖ components) estimates, with optional distance binning.
+Uses the robust model: **(r² + Φₖ) / (r² + Φₖ)** — dropping the cross term which contributes <0.5% signal but has kurtosis in the thousands.
+
+**Key finding**: Including the cross term inflates estimates by 13–39% with negligible signal gain. The robust model is now the default.
+
+For details, see `upsilon_k_decomposition.md`.
 
 ## Installation
 
@@ -70,11 +74,16 @@ This estimates upsilon_k for k={2,4,6,8,10} using 100k locus pair samples, binne
 
 CSV with columns:
 - `k`: kinship class
-- `upsilon_k_crude`: crude estimate
-- `upsilon_k_full`: full estimate
-- `r2_MM`, `r2_MQ`, `shared_ibd_part`: components
+- `upsilon_k`: robust estimate (drops noisy cross term)
+- `r2_MM`, `r2_MQ`, `shared_ibd_part`: components of the robust model
 
-Distance bins (if `--bin-by-distance`) add columns like `bin_0_upsilon_crude`, `bin_0_r2_MM`, etc.
+Distance bins (if `--bin-by-distance`) add columns like `bin_0_upsilon_k`, `bin_0_r2_MM`, etc.
+
+### Deprecated output
+
+Older scripts may reference:
+- `upsilon_k_crude`: Now just an alias for `upsilon_k`
+- `upsilon_k_full`: Deprecated; includes the noisy cross term (inflates by 13–39%)
 
 ## License
 

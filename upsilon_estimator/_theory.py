@@ -74,6 +74,32 @@ def _joint_ibd_probs_no_ibd2(p1, rho):
     return p00, p10, p11
 
 
+def depth_from_k(k):
+    """Meioses from the shared ancestor to each relative (k >= 3): k // 2
+    (half-sibs 1, first cousins 2, second cousins 3, ...)."""
+    if k < 3:
+        raise ValueError("depth_from_k is for the non-IBD2 ladder (k >= 3)")
+    return k // 2
+
+
+def p11_libd_split(p1, rho, c_ab, depth):
+    """Split P(both loci IBD) into linked-IBD (same ancestral haplotype, Sved
+    1971) and cross-lineage (different haplotypes):
+
+        p11       = p1^2 + p1(1-p1) rho
+        p11_same  = p1 * (1 - c_ab)^(2*depth)   (LIBD: IBD at a, no recombination
+                    between a and b along either relative's path)
+        p11_cross = p11 - p11_same
+
+    Same-lineage keeps the r*lambda_a*lambda_b cross term (shared alleles carry
+    LD); cross-lineage has conditional covariance r^2/4 (shared alleles
+    independent). Validated by gene-dropping in the main ld_sim test suite.
+    """
+    p11 = p1**2 + p1 * (1 - p1) * rho
+    p11_same = np.clip(p1 * (1.0 - c_ab) ** (2 * depth), 0.0, p11)
+    return p11, p11_same, p11 - p11_same
+
+
 def _joint_ibd_probs_full_sibs(rho1):
     """P(S_a, S_b | full sibs) for S_a, S_b in {0,1,2} as function of rho1."""
     rho1 = np.asarray(rho1, dtype=float)
@@ -136,8 +162,16 @@ def cov_k_three_way(k, f_a, f_b, r_ab, c_ab, n_haplotypes=None):
         p1 = p1_from_k(k)
         rho = rho_for_k(k, c_ab)
         p00, p10, p11 = _joint_ibd_probs_no_ibd2(p1, rho)
-        A = p00 + p10 * (kappa_a + kappa_b + 6.0) / 4.0 + 0.75 * p11
-        C = 0.25 * p11
+        # Split the (1,1) state into linked-IBD (cov = 3/4 r^2 + 1/4 r ll) and
+        # cross-lineage (cov = r^2/4, no cross term). See p11_libd_split.
+        _, p11_same, p11_cross = p11_libd_split(p1, rho, c_ab, depth_from_k(k))
+        A = (
+            p00
+            + p10 * (kappa_a + kappa_b + 6.0) / 4.0
+            + 0.75 * p11_same
+            + 0.25 * p11_cross
+        )
+        C = 0.25 * p11_same
         B = np.broadcast_to(0.25 * p1 * (1.0 - p1) * rho, r.shape)
 
     r2_part = A * r2

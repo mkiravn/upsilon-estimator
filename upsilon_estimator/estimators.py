@@ -125,7 +125,7 @@ def load_panel(path, chromosome=None):
     }
 
 
-def estimate_upsilon_k_crude(
+def estimate_upsilon_k(
     zarr_path,
     marker_indices=None,
     causal_indices=None,
@@ -136,10 +136,14 @@ def estimate_upsilon_k_crude(
     k_values=None,
     chromosome=None,
 ):
-    """Estimate crude upsilon_k: (r²_MQ + Φₖ) / (r²_MM + Φₖ).
+    """Estimate upsilon_k: (r²_MQ + Φₖ) / (r²_MM + Φₖ).
 
-    Simpler, more interpretable variant without A_k (kurtosis) weighting.
-    Uses pooled r² and shared IBD component only.
+    Primary estimator: debiased r² and shared IBD component only.
+    Drops the cross term (B_k r·λ_a·λ_b) because:
+      - It contributes <0.5% to signal but dominates variance
+      - It has kurtosis in the thousands for rare variants
+      - It is sign-cancelling (coupling/repulsion pairs mostly cancel)
+      - Full model inflates estimates by 13-39% with no signal gain
 
     Args:
         zarr_path: Path to zarr or npz panel.
@@ -153,7 +157,7 @@ def estimate_upsilon_k_crude(
         chromosome: Specific chromosome to load (for xftsim zarr).
 
     Returns:
-        DataFrame with columns: k, upsilon_k_crude, r2_MM, r2_MQ, shared_ibd_part
+        DataFrame with columns: k, upsilon_k, r2_MM, r2_MQ, shared_ibd_part
     """
     if k_values is None:
         k_values = list(range(2, 10))  # k=2 to k=9
@@ -189,7 +193,7 @@ def estimate_upsilon_k_crude(
         marker_idx, causal_idx, n_draws, rng=rng, panel=panel, gpos=gpos
     )
 
-    # Compute crude upsilon_k for each k
+    # Compute upsilon_k for each k (drops cross term)
     rows = []
     r2_MM = np.nanmean(theory.r2_debiased(den["r"] ** 2, n_hap))
     r2_MQ = np.nanmean(theory.r2_debiased(num["r"] ** 2, n_hap))
@@ -198,13 +202,13 @@ def estimate_upsilon_k_crude(
         comp_num = estimate_components(k, num, n_hap)
         shared_ibd = np.nanmean(comp_num["shared_ibd_part"])
 
-        # Crude: (r2_MQ + Phi_k) / (r2_MM + Phi_k)
-        upsilon_crude = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
+        # Primary: (r2_MQ + Phi_k) / (r2_MM + Phi_k), no cross term
+        upsilon = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
 
         rows.append(
             {
                 "k": k,
-                "upsilon_k_crude": upsilon_crude,
+                "upsilon_k": upsilon,
                 "r2_MM": r2_MM,
                 "r2_MQ": r2_MQ,
                 "shared_ibd_part": shared_ibd,
@@ -214,7 +218,7 @@ def estimate_upsilon_k_crude(
     return pd.DataFrame(rows)
 
 
-def estimate_upsilon_k(
+def estimate_upsilon_k_full(
     zarr_path,
     marker_indices=None,
     causal_indices=None,
@@ -224,33 +228,37 @@ def estimate_upsilon_k(
     seed=1,
     k_values=None,
     chromosome=None,
-    bin_by_distance=False,
-    n_distance_bins=10,
 ):
-    """Estimate upsilon_k (marker-causal relatedness ratio) from a founder panel.
+    """DEPRECATED: Estimate upsilon_k including the cross term.
+
+    WARNING: This estimator includes B_k r·λ_a·λ_b (cross term), which:
+      - Dominates variance with kurtosis in the thousands
+      - Contributes <0.5% to the signal
+      - Inflates estimates by 13-39% compared to the crude model
+      - Is sign-cancelling (provides no additional information)
+
+    Use estimate_upsilon_k() instead (the crude model without cross term).
 
     Args:
-        zarr_path: Path to zarr directory or .npz file with founder panel.
-        marker_indices: Array of site indices to use as markers (preferred over threshold).
-        causal_indices: Array of site indices to use as causal sites (preferred over threshold).
-        marker_threshold: Allele frequency threshold for markers (only used if marker_indices=None).
-        causal_threshold: Allele frequency threshold for causal sites (only used if causal_indices=None).
-        n_draws: Number of locus pairs to sample (default 150,000).
-        seed: Random seed for reproducibility (default 1).
-        k_values: List of kinship classes to compute (default [2,3,4,5,6,7,8,9,10]).
-        chromosome: Chromosome to load (if available in data).
-        bin_by_distance: If True, return results binned by genetic distance.
-        n_distance_bins: Number of distance bins.
+        See estimate_upsilon_k() for parameter documentation.
 
     Returns:
         DataFrame with columns:
             - k: kinship class
-            - upsilon_k_crude: crude (debiased r2 + Phi_k) estimate
-            - upsilon_k_full: full (exact h_k) estimate
+            - upsilon_k: estimate without cross term
+            - upsilon_k_full: estimate with cross term (UNRELIABLE)
             - r2_MM: mean debiased r2 (marker-marker)
             - r2_MQ: mean debiased r2 (marker-causal)
             - shared_ibd_part: mean shared IBD component (Phi_k)
     """
+    import warnings
+    warnings.warn(
+        "estimate_upsilon_k_full is deprecated. Use estimate_upsilon_k() instead. "
+        "The full model (with cross term) has 13-39% higher variance with <0.5% signal gain.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     if k_values is None:
         k_values = list(range(2, 11))
 
@@ -296,16 +304,16 @@ def estimate_upsilon_k(
 
         shared_ibd = np.nanmean(comp_num["shared_ibd_part"])
 
-        # Crude: (r2_MQ + Phi_k) / (r2_MM + Phi_k)
-        upsilon_crude = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
+        # Primary: (r2_MQ + Phi_k) / (r2_MM + Phi_k)
+        upsilon = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
 
-        # Full: mean(h_k_num) / mean(h_k_den)
+        # Full with cross term: mean(h_k_num) / mean(h_k_den)
         upsilon_full = np.nanmean(comp_num["total"]) / np.nanmean(comp_den["total"])
 
         rows.append(
             {
                 "k": k,
-                "upsilon_k_crude": upsilon_crude,
+                "upsilon_k": upsilon,
                 "upsilon_k_full": upsilon_full,
                 "r2_MM": r2_MM,
                 "r2_MQ": r2_MQ,
@@ -313,14 +321,46 @@ def estimate_upsilon_k(
             }
         )
 
-    results = pd.DataFrame(rows)
+    return pd.DataFrame(rows)
 
-    if bin_by_distance:
-        results = _add_distance_bins(
-            num, den, marker_idx, causal_idx, gpos, results, k_values, n_hap, n_distance_bins
-        )
 
-    return results
+def estimate_upsilon_k_crude(
+    zarr_path,
+    marker_indices=None,
+    causal_indices=None,
+    marker_threshold=None,
+    causal_threshold=None,
+    n_draws=150_000,
+    seed=1,
+    k_values=None,
+    chromosome=None,
+):
+    """DEPRECATED: Alias for estimate_upsilon_k().
+
+    This function is kept for backward compatibility. Use estimate_upsilon_k() instead.
+    Returns the same results with column "upsilon_k_crude" for compatibility.
+    """
+    import warnings
+    warnings.warn(
+        "estimate_upsilon_k_crude is deprecated. Use estimate_upsilon_k() directly; "
+        "it now computes the same robust estimate.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    result = estimate_upsilon_k(
+        zarr_path=zarr_path,
+        marker_indices=marker_indices,
+        causal_indices=causal_indices,
+        marker_threshold=marker_threshold,
+        causal_threshold=causal_threshold,
+        n_draws=n_draws,
+        seed=seed,
+        k_values=k_values,
+        chromosome=chromosome,
+    )
+    # Rename for backward compatibility
+    result = result.rename(columns={"upsilon_k": "upsilon_k_crude"})
+    return result
 
 
 def _add_distance_bins(num, den, marker_idx, causal_idx, gpos, results, k_values, n_hap, n_bins):
@@ -348,12 +388,10 @@ def _add_distance_bins(num, den, marker_idx, causal_idx, gpos, results, k_values
             r2_MQ = np.nanmean(theory.r2_debiased(num_bin["r"] ** 2, n_hap))
             shared_ibd = np.nanmean(comp_num["shared_ibd_part"])
 
-            upsilon_crude = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
-            upsilon_full = np.nanmean(comp_num["total"]) / np.nanmean(comp_den["total"])
+            upsilon = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
 
             bin_key = f"bin_{i}"
-            bin_results[f"{bin_key}_upsilon_crude"] = upsilon_crude
-            bin_results[f"{bin_key}_upsilon_full"] = upsilon_full
+            bin_results[f"{bin_key}_upsilon_k"] = upsilon
             bin_results[f"{bin_key}_r2_MM"] = r2_MM
             bin_results[f"{bin_key}_r2_MQ"] = r2_MQ
             bin_results[f"{bin_key}_distance"] = f"{bin_start:.3f}-{bin_end:.3f}"

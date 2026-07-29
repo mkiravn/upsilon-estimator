@@ -100,3 +100,25 @@ def test_density_invariance_under_thinning():
     u_full, se_full = run(full)
     u_thin, se_thin = run(thin)
     assert abs(u_full - u_thin) < 4 * np.hypot(se_full, se_thin)
+
+
+def test_effect_weights_unit_mean_and_alpha_minus_one():
+    # gamma has unit mean over the causal pool, and alpha=-1 gives gamma == 1
+    f = np.array([0.01, 0.05, 0.2, 0.4])
+    for a in (-1.5, -1.0, 0.0):
+        g = S.effect_size_weights(f, f, a)
+        assert np.isclose(g.mean(), 1.0)
+    assert np.allclose(S.effect_size_weights(f, f, -1.0), 1.0)
+
+
+def test_weighted_alpha_minus_one_equals_unweighted():
+    panel, gpos, af = _synthetic_panel(n_sites=1200, n_hap=400)
+    mk = np.nonzero(af > 0.1)[0]
+    cs = np.nonzero((af > 0) & (af < 0.1))[0]
+    rng = np.random.default_rng(5)
+    num, den = S.stratified_draws(mk, cs, 12000, rng, panel, gpos, n_strata=16)
+    gamma1 = S.effect_size_weights(num["f_j"], af[cs], alpha=-1.0)
+    u_unw, _ = S.block_jackknife_se(4, num, den, panel.n_haplotypes, n_blocks=15)
+    u_w, _ = S.block_jackknife_se(4, num, den, panel.n_haplotypes, n_blocks=15,
+                                  gamma_num=gamma1)
+    assert np.isclose(u_unw, u_w, atol=1e-12)

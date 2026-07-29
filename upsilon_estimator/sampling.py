@@ -161,17 +161,40 @@ def _wmean(x, w):
     return np.sum(w[m] * x[m]) / np.sum(w[m])
 
 
-def _upsilon_from_draws(k, num, den, n_hap, include_A_k=False, idx=None):
-    """Self-normalised weighted ratio on an optional subset `idx` (for jackknife)."""
+def effect_size_weights(f_pairs, f_causal_pool, alpha):
+    """Speed alpha-model effect-size weights gamma_l = [2f(1-f)]^(1+alpha).
+
+    Normalised to unit mean over the *causal pool* (not all sites), so the
+    weighted causal GRM has the same scale as the unweighted one and the
+    frequency-free Phi_k cancels in the ratio. alpha = -1 gives gamma == 1
+    (GCTA/uniform), so the weighted estimate reduces exactly to the unweighted.
+    """
+    het = 2.0 * np.asarray(f_pairs, float) * (1.0 - np.asarray(f_pairs, float))
+    pool = 2.0 * np.asarray(f_causal_pool, float) * (1.0 - np.asarray(f_causal_pool, float))
+    norm = float(np.mean(pool ** (1.0 + alpha)))
+    return het ** (1.0 + alpha) / norm
+
+
+def _upsilon_from_draws(k, num, den, n_hap, include_A_k=False, idx=None, gamma_num=None):
+    """Self-normalised weighted ratio on an optional subset `idx` (for jackknife).
+
+    If gamma_num is given (per numerator pair), the numerator contribution is
+    scaled by the causal locus's effect-size weight -- i.e. upsilon_k for a
+    weighted causal GRM. The whole contribution (r^2 part and Phi_k) is scaled,
+    as the weighted GRM multiplies the entire per-locus term by gamma.
+    """
     cn = _pair_contrib(k, num, n_hap, include_A_k)
     cd = _pair_contrib(k, den, n_hap, include_A_k)
+    if gamma_num is not None:
+        cn = cn * gamma_num
     wn, wd = num["weight"], den["weight"]
     if idx is not None:
         cn, cd, wn, wd = cn[idx], cd[idx], wn[idx], wd[idx]
     return _wmean(cn, wn) / _wmean(cd, wd)
 
 
-def block_jackknife_se(k, num, den, n_hap, n_blocks=200, include_A_k=False):
+def block_jackknife_se(k, num, den, n_hap, n_blocks=200, include_A_k=False,
+                       gamma_num=None):
     """Delete-a-block jackknife SE of upsilon_k over contiguous anchor-gpos blocks.
 
     Blocking on the anchor position captures the dominant LD dependence between
@@ -185,12 +208,13 @@ def block_jackknife_se(k, num, den, n_hap, n_blocks=200, include_A_k=False):
     edges[-1] = np.nextafter(edges[-1], np.inf)
     blk = np.clip(np.searchsorted(edges, g, side="right") - 1, 0, n_blocks - 1)
 
-    theta_full = _upsilon_from_draws(k, num, den, n_hap, include_A_k)
+    theta_full = _upsilon_from_draws(k, num, den, n_hap, include_A_k, gamma_num=gamma_num)
     reps = []
     present = np.unique(blk)
     for b in present:
         keep = np.nonzero(blk != b)[0]
-        reps.append(_upsilon_from_draws(k, num, den, n_hap, include_A_k, idx=keep))
+        reps.append(_upsilon_from_draws(k, num, den, n_hap, include_A_k, idx=keep,
+                                        gamma_num=gamma_num))
     reps = np.array(reps, float)
     reps = reps[np.isfinite(reps)]
     B = reps.size

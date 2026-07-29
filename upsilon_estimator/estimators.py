@@ -234,6 +234,7 @@ def estimate_upsilon_k_scale_aware(
     n_strata=24,
     n_blocks=200,
     include_A_k=False,
+    alpha=None,
 ):
     """Scale-aware, density-weighted upsilon_k with block-jackknife standard errors.
 
@@ -255,10 +256,15 @@ def estimate_upsilon_k_scale_aware(
         n_strata: number of log-spaced distance strata.
         n_blocks: number of jackknife blocks.
         include_A_k: if True use A_k * r^2 (keeps the coefficient); default robust r^2.
+        alpha: if not None, also compute the Speed alpha-model weighted estimate,
+            gamma_l = [2f(1-f)]^(1+alpha) on the causal locus, normalised over the
+            causal pool (alpha = -1 is GCTA/uniform and reproduces the unweighted
+            estimate). Adds columns upsilon_k_weighted, upsilon_k_weighted_se, alpha.
         (other args as in estimate_upsilon_k.)
 
     Returns:
-        DataFrame with columns: k, upsilon_k, upsilon_k_se, n_marker, n_causal.
+        DataFrame with columns: k, upsilon_k, upsilon_k_se, n_marker, n_causal
+        (plus weighted columns when alpha is given).
     """
     if k_values is None:
         k_values = list(range(2, 10))
@@ -291,18 +297,33 @@ def estimate_upsilon_k_scale_aware(
         d_min=d_min, d_max=d_max, n_strata=n_strata,
     )
 
+    gamma_num = None
+    if alpha is not None:
+        # weight each numerator pair by its causal locus (the partner, num["f_j"]),
+        # normalised to unit mean over the causal pool.
+        gamma_num = _samp.effect_size_weights(num["f_j"], af[causal_idx], alpha)
+
     rows = []
     for k in k_values:
         ups, se = _samp.block_jackknife_se(
             k, num, den, n_hap, n_blocks=n_blocks, include_A_k=include_A_k
         )
-        rows.append({
+        row = {
             "k": k,
             "upsilon_k": ups,
             "upsilon_k_se": se,
             "n_marker": len(marker_idx),
             "n_causal": len(causal_idx),
-        })
+        }
+        if alpha is not None:
+            uw, sew = _samp.block_jackknife_se(
+                k, num, den, n_hap, n_blocks=n_blocks, include_A_k=include_A_k,
+                gamma_num=gamma_num,
+            )
+            row["upsilon_k_weighted"] = uw
+            row["upsilon_k_weighted_se"] = sew
+            row["alpha"] = alpha
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -571,17 +592,11 @@ def estimate_upsilon_k_weighted(
         marker_idx, causal_idx, n_draws, rng=rng, panel=panel, gpos=gpos
     )
 
-    # Get allele frequencies for the sampled pairs
-    af_marker = af[den["anchor"]]  # marker anchors in denominator pairs
-    af_causal = af[num["anchor"]]  # causal anchors in numerator pairs
-
-    # Compute gamma weights: gamma_l = [2*f_l*(1-f_l)]^(1+alpha)
-    # Normalize so mean gamma across all frequencies is 1
-    norm_freq = af[(af > 0) & (af < 1)]  # Exclude fixed variants
-    norm_factor = float(np.mean((2.0 * norm_freq * (1.0 - norm_freq)) ** (1.0 + alpha)))
-
-    gamma_marker = (2.0 * af_marker * (1.0 - af_marker)) ** (1.0 + alpha) / norm_factor
-    gamma_causal = (2.0 * af_causal * (1.0 - af_causal)) ** (1.0 + alpha) / norm_factor
+    # Effect-size weight of each numerator pair's CAUSAL locus (the partner, f_j),
+    # normalised to unit mean over the causal pool (not all sites). alpha = -1 gives
+    # gamma == 1, so the weighted estimate reduces exactly to the unweighted.
+    from . import sampling as _samp
+    gamma_causal = _samp.effect_size_weights(num["f_j"], af[causal_idx], alpha)
 
     # Compute upsilon_k for each k
     rows = []
@@ -596,27 +611,15 @@ def estimate_upsilon_k_weighted(
         # Unweighted: (r2_MQ + Phi_k) / (r2_MM + Phi_k)
         upsilon = (r2_MQ + shared_ibd) / (r2_MM + shared_ibd)
 
-        # Weighted: recompute numerator with per-pair gamma weighting
-        # Only the CAUSAL (numerator partner) frequency determines the weight
-        # Get the raw three-way decomposition for the numerator pairs
-        tw_num = theory.cov_k_three_way(
-            k, num["f_i"], num["f_j"], num["r"], num["c_ab"], n_haplotypes=n_hap
-        )
+        # Weighted numerator: scale each pair's FULL robust contribution
+        # (debiased r^2 + Phi_k) by the causal locus's effect-size weight. The
+        # weighted causal GRM multiplies the whole per-locus term by gamma, so
+        # Phi_k is scaled too (it cancels only because gamma has unit mean).
+        r2_num_pp = theory.r2_debiased(num["r"] ** 2, n_hap)
+        contrib_pp = r2_num_pp + comp_num["shared_ibd_part"]
+        h_k_weighted_numerator = np.nanmean(gamma_causal * contrib_pp)
 
-        # Per-pair weighting: gamma_causal only (not marker)
-        # The causal locus determines effect-size variance
-        gamma_pair_weight = gamma_causal
-
-        # Weighted r2 component: A_k * r2 * gamma_causal
-        r2_part_weighted = tw_num["r2_part"] * gamma_pair_weight
-
-        # Shared IBD component is not weighted (frequency-independent)
-        shared_ibd_part = tw_num["shared_ibd_part"]
-
-        # Numerator: mean(weighted h_k) = mean(r2_part_weighted + shared_ibd_part)
-        h_k_weighted_numerator = np.nanmean(r2_part_weighted + shared_ibd_part)
-
-        # Upsilon_k^(gamma) = mean(h_k_weighted) / (r2_MM + Phi_k)
+        # Upsilon_k^(gamma) = mean(gamma * h_k) / (r2_MM + Phi_k)
         upsilon_weighted = h_k_weighted_numerator / (r2_MM + shared_ibd)
 
         rows.append(

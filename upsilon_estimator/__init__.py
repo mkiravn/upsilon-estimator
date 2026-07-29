@@ -19,19 +19,23 @@ See upsilon_k_decomposition.md for theoretical justification.
 
 from .estimators import (
     estimate_upsilon_k,
+    estimate_upsilon_k_scale_aware,
     estimate_upsilon_k_weighted,
     estimate_upsilon_k_crude,
     estimate_upsilon_k_full,
     load_panel,
 )
 from .utils import paired_draws, estimate_components
+from . import sampling
 
 __all__ = [
     "estimate_upsilon_k",
+    "estimate_upsilon_k_scale_aware",
     "estimate_upsilon_k_weighted",
     "estimate_upsilon_k_crude",
     "estimate_upsilon_k_full",
     "load_panel",
     "paired_draws",
     "estimate_components",
+    "sampling",
 ]

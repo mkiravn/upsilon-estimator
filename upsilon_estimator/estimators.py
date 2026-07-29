@@ -7,6 +7,7 @@ import pandas as pd
 
 from . import _theory as theory
 from . import _panel as zb
+from . import sampling as _samp
 from .utils import paired_draws, estimate_components
 
 
@@ -215,6 +216,93 @@ def estimate_upsilon_k(
             }
         )
 
+    return pd.DataFrame(rows)
+
+
+def estimate_upsilon_k_scale_aware(
+    zarr_path,
+    marker_indices=None,
+    causal_indices=None,
+    marker_threshold=None,
+    causal_threshold=None,
+    n_draws=150_000,
+    seed=1,
+    k_values=None,
+    chromosome=None,
+    d_min=1e-3,
+    d_max=None,
+    n_strata=24,
+    n_blocks=200,
+    include_A_k=False,
+):
+    """Scale-aware, density-weighted upsilon_k with block-jackknife standard errors.
+
+    Improves on estimate_upsilon_k() in two ways (see upsilon_estimator.sampling):
+      * Partners are drawn conditional on the anchor, stratified over log-spaced
+        genetic-distance bins, so every scale is covered; importance weights make
+        the estimate density-invariant (thinning SNPs leaves upsilon_k unchanged
+        within the SE) and unbiased for the pair average within the linked window.
+      * A delete-a-block jackknife over contiguous anchor-position blocks gives a
+        ratio-correct, LD-aware standard error.
+
+    Note on scale: upsilon_k depends on d_max (the maximum genetic distance over
+    which pairs are counted). The genome-relevant value uses d_max = the
+    chromosome's full genetic length; pass d_max explicitly to fix the scale, or
+    leave None to use the panel's full map span.
+
+    Args:
+        d_min, d_max: genetic-distance stratum range in cM (d_max None => full span).
+        n_strata: number of log-spaced distance strata.
+        n_blocks: number of jackknife blocks.
+        include_A_k: if True use A_k * r^2 (keeps the coefficient); default robust r^2.
+        (other args as in estimate_upsilon_k.)
+
+    Returns:
+        DataFrame with columns: k, upsilon_k, upsilon_k_se, n_marker, n_causal.
+    """
+    if k_values is None:
+        k_values = list(range(2, 10))
+
+    panel_data = load_panel(zarr_path, chromosome=chromosome)
+    panel = panel_data["panel"]
+    af = panel_data["af"]
+    gpos = panel_data["gpos"]
+    n_hap = panel_data["n_hap"]
+
+    if marker_indices is not None and causal_indices is not None:
+        marker_idx = np.asarray(marker_indices, dtype=int)
+        causal_idx = np.asarray(causal_indices, dtype=int)
+    else:
+        if marker_threshold is None:
+            marker_threshold = 0.01
+        if causal_threshold is None:
+            causal_threshold = 0.05
+        marker_idx = np.nonzero(af > marker_threshold)[0]
+        causal_idx = np.nonzero((af > 0) & (af < causal_threshold))[0]
+
+    if len(marker_idx) == 0 or len(causal_idx) == 0:
+        raise ValueError(
+            f"No marker/causal sites (marker: {len(marker_idx)}, causal: {len(causal_idx)})"
+        )
+
+    rng = np.random.default_rng(seed)
+    num, den = _samp.stratified_draws(
+        marker_idx, causal_idx, n_draws, rng, panel, gpos,
+        d_min=d_min, d_max=d_max, n_strata=n_strata,
+    )
+
+    rows = []
+    for k in k_values:
+        ups, se = _samp.block_jackknife_se(
+            k, num, den, n_hap, n_blocks=n_blocks, include_A_k=include_A_k
+        )
+        rows.append({
+            "k": k,
+            "upsilon_k": ups,
+            "upsilon_k_se": se,
+            "n_marker": len(marker_idx),
+            "n_causal": len(causal_idx),
+        })
     return pd.DataFrame(rows)
 
 

@@ -18,10 +18,11 @@ dependencies = [
     "pandas>=1.3",
 ]
 
-# Note: ld_sim is vendored internally (_theory.py, _panel.py)
+# Note: ld_sim is vendored internally (_theory.py, _panel.py, _xft_zarr_reader.py)
 
 [project.optional-dependencies]
 zarr = ["zarr>=2.10"]
+xft = ["blosc"]  # for reading xftsim HaplotypeArray zarr panels (_xft_zarr_reader.py)
 dev = ["pytest", "black", "mypy"]
 
 [project.scripts]

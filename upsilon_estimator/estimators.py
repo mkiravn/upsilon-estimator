@@ -68,11 +68,13 @@ def load_panel(path, chromosome=None):
             "n_sites": len(pos),
         }
 
-    # Try xftsim format first (has HaplotypeArray, chrom metadata)
-    try:
-        import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-        from ld_sim.xft_zarr_reader import open_xft_founders
+    # Format is detected from directory structure, not by trial-and-error: an
+    # xftsim HaplotypeArray store has a "HaplotypeArray" subdirectory (plus
+    # af/chrom/pos_bp/pos_cM); anything else under a zarr directory is assumed
+    # to be a standard zarr panel. This is vendored in _xft_zarr_reader.py, so
+    # it has no dependency on the sibling ld_sim repo being importable.
+    if (path / "HaplotypeArray").is_dir():
+        from ._xft_zarr_reader import open_xft_founders
 
         store = open_xft_founders(str(path))
         chrom_to_load = chromosome if chromosome is not None else store.chromosomes()[0]
@@ -87,10 +89,8 @@ def load_panel(path, chromosome=None):
             "n_hap": panel.n_haplotypes,
             "n_sites": panel.n_sites,
         }
-    except (ImportError, FileNotFoundError, AssertionError):
-        pass
 
-    # Fall back to standard zarr
+    # Standard zarr
     try:
         import zarr
     except ImportError:

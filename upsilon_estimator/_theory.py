@@ -21,6 +21,13 @@ RHO_POLY_COEFFS = {
          -179.7019607843137, 288.62745098039215, -319.2470588235294,
          246.46274509803922, -131.51372549019607, 46.68235294117647,
          -10.03921568627451, 1.0],
+    # half fourth cousins. Half relationships (odd k, depth d = (k-1)/2 a side) have
+    # P(S_a = S_b = 1) = ((1-c)^2 + c^2)/2 * ((1-c)/2)^(2d-2), so
+    # rho = (P11 - p1^2) / (p1 (1 - p1)); this reproduces k = 3, 5, 7, 9 above exactly.
+    11: [2.003913894324853, -18.035225048923678, 73.14285714285714,
+         -176.34442270058707, 280.54794520547944, -308.6027397260274,
+         238.46575342465752, -128.2504892367906, 46.09001956947162,
+         -10.019569471624266, 1.0],
 }
 
 
@@ -41,8 +48,8 @@ def rho_for_k(k, c_ab):
     """
     if k not in RHO_POLY_COEFFS:
         raise ValueError(
-            f"rho_for_k only supports k in {sorted(RHO_POLY_COEFFS)}; "
-            "k=2 is full siblings (handled separately)"
+            f"rho_for_k: no polynomial for k={k}; supported k are {sorted(RHO_POLY_COEFFS)} "
+            "(k=2, full siblings, is handled separately)"
         )
     c_ab = np.asarray(c_ab, dtype=float)
     return np.polyval(RHO_POLY_COEFFS[k], c_ab)
